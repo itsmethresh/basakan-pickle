@@ -6,3 +6,4 @@ dist/
 .md
 supabase/.temp/
 *.tsbuildinfo
+.wrangler/

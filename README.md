@@ -66,11 +66,23 @@ Create Database Webhooks in Dashboard > Database > Webhooks. Add the `x-webhook-
 The functions verify the webhook secret and re-read booking data before sending. Resend idempotency keys help prevent duplicate emails on webhook retries. No owner email is sent until a recipient is configured in Settings.
 
 Expired holds are deleted every 10 minutes by a scheduled database job. The migration also indexes expiration time and removes expired holds already in the table.
-## Cloudflare Pages
+## Cloudflare deployment
 
-### Publish the website
+The frontend is a static React/Vite SPA; Supabase remains responsible for the database, authentication, file storage, and Edge Functions. Choose either Workers or Pages. The reported `/workers/scripts/.../versions` API path identifies a **Workers** deployment, not Pages.
 
-Cloudflare Pages hosts the static React/Vite website. Supabase remains responsible for the database, authentication, file storage, and Edge Functions.
+### Workers with Wrangler
+
+This repository includes [`wrangler.jsonc`](./wrangler.jsonc) for a static-assets Worker named `basakan-pickle`. It serves Vite's `dist` directory and enables Workers' built-in SPA fallback. Direct visits and refreshes on React Router routes such as `/booking/<booking-id>/<token>` serve `index.html` without a catch-all `_redirects` rule.
+
+1. In **Workers & Pages → Workers Builds**, connect the GitHub repository and choose `main` as the production branch.
+2. Set the build command to `npm run build` and the deploy command to `npx wrangler deploy`. Wrangler reads `wrangler.jsonc` to find the static assets in `dist`.
+3. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as **build-time** variables for production (and preview if needed), then redeploy after changes. Vite embeds these values in the client bundle. Never add the Supabase service-role key, Resend API key, or webhook secret to frontend build variables.
+4. Add the production hostname under the Worker’s **Settings → Domains & Routes**, then follow Cloudflare’s DNS/TLS instructions.
+5. Smoke-test `/`, `/admin`, and a valid booking-summary URL. Refresh each nested route directly and verify the frontend can reach Supabase.
+
+### Pages: publish the website
+
+Cloudflare Pages hosts the same static React/Vite website. The instructions below apply only if you create a **Pages** project instead of deploying the Worker above.
 
 1. **Prepare the production backend.**
    - Apply every unapplied migration in `supabase/migrations/` in timestamp order. Do not run the destructive `supabase-schema.md` setup script against existing booking data.
@@ -103,6 +115,6 @@ Cloudflare Pages hosts the static React/Vite website. Supabase remains responsib
    - Sign in to `/admin`, test the admin actions, and verify owner/customer email delivery and the Resend activity log.
    - Check **Workers & Pages → Deployments** and the Supabase/Resend logs if a step fails. Fix the issue and push a new commit; Git integration will build and deploy it.
 
-The included `public/_redirects` file keeps React Router routes working after a direct visit or refresh. Cloudflare Pages uses Git integration to deploy new commits automatically and also provides preview deployments for other branches.
+Cloudflare Pages automatically provides SPA fallback when the output contains `index.html` and no `404.html`. Do not add a catch-all `/* /index.html 200` rule: Workers detects that rule as a redirect loop. Pages Git integration also provides preview deployments for other branches.
 
-Official references: [Cloudflare Pages Git integration](https://developers.cloudflare.com/pages/get-started/git-integration/), [Pages build configuration](https://developers.cloudflare.com/pages/configuration/build-configuration/), [Pages custom domains](https://developers.cloudflare.com/pages/configuration/custom-domains/), [Cloudflare full DNS setup](https://developers.cloudflare.com/dns/zone-setups/full-setup/setup/), and [Supabase Auth redirect URLs](https://supabase.com/docs/guides/auth/redirect-urls).
+Official references: [Workers SPA routing](https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/), [Workers static asset configuration](https://developers.cloudflare.com/workers/static-assets/binding/), [Pages Git integration](https://developers.cloudflare.com/pages/get-started/git-integration/), [Pages build configuration](https://developers.cloudflare.com/pages/configuration/build-configuration/), [Pages custom domains](https://developers.cloudflare.com/pages/configuration/custom-domains/), [Cloudflare full DNS setup](https://developers.cloudflare.com/dns/zone-setups/full-setup/setup/), and [Supabase Auth redirect URLs](https://supabase.com/docs/guides/auth/redirect-urls).
