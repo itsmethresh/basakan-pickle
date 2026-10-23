@@ -1,0 +1,3 @@
+export function StepIndicator({ step }: { step: number }) {
+  return <div className="mb-6 flex items-center gap-2">{['COURT', 'TIMESLOT', 'DETAILS', 'PAYMENT'].map((label, index) => { const number = index + 1; const active = number === step; return <div key={label} className="flex min-w-0 flex-1 items-center gap-2"><div className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-sm font-bold ${number <= step ? 'bg-[#103b2b] text-white' : 'bg-[#eceeec] text-[#708077]'}`}>{number}</div>{active && <span className="truncate text-[10px] font-bold text-[#103b2b]">{label}</span>}{index < 3 && <div className={`h-0.5 min-w-2 flex-1 ${number < step ? 'bg-[#2e7d58]' : 'bg-[#e5eae5]'}`} />}</div> })}</div>
+}

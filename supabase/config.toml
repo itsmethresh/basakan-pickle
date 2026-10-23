@@ -1,0 +1,5 @@
+[functions.notify-owner]
+verify_jwt = false
+
+[functions.notify-customer]
+verify_jwt = false
