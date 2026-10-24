@@ -51,7 +51,7 @@ export function AdminPage() {
   const courtTotal = courts.data?.length ?? 0
   const refresh = () => void client.invalidateQueries({ queryKey: ['admin-bookings'] })
   const notify = (message: string, variant: 'success' | 'error' = 'success') => setToast({ message, variant })
-  const signOut = () => void supabase.auth.signOut().then(() => navigate('/admin/login'))
+  const signOut = () => void supabase.auth.signOut().then(() => { client.setQueryData(['auth'], null); navigate('/admin/login') })
 
   if (auth.isLoading || (auth.data && !accessChecked)) return <div className="py-20 text-center">Checking admin access…</div>
   if (!auth.data) return <Navigate to="/admin/login" replace />
