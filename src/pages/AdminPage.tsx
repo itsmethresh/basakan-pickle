@@ -3,9 +3,10 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarDays, Clock, LogOut, Plus, Search, Settings as SettingsIcon } from 'lucide-react'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { Toast } from '../components/Toast'
 import { supabase } from '../lib/supabase'
 import { friendlyError } from '../lib/errors'
-import { dateLabel, isPastSlot, money, timeLabel, todayManila } from '../lib/format'
+import { dateLabel, isPastSlot, money, rateForHour, timeLabel, todayManila, totalForHours } from '../lib/format'
 import type { Booking, BookingStatus, Settings } from '../lib/database.types'
 
 type Tab = 'bookings' | 'settings'
@@ -24,7 +25,7 @@ const StatusDot = ({ status }: { status: string }) => <span className="inline-fl
 export function AdminPage() {
   const navigate = useNavigate(); const client = useQueryClient()
   const [authorized, setAuthorized] = useState(false); const [accessChecked, setAccessChecked] = useState(false); const [accessError, setAccessError] = useState('')
-  const [search, setSearch] = useState(''); const [message, setMessage] = useState(''); const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [search, setSearch] = useState(''); const [toast, setToast] = useState<{ message: string; variant: 'success' | 'error' } | null>(null); const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<'all' | BookingStatus>('all')
   const [newReservationOpen, setNewReservationOpen] = useState(false)
   const [tab, setTab] = useState<Tab>('bookings'); const [menuOpen, setMenuOpen] = useState(false)
@@ -50,6 +51,7 @@ export function AdminPage() {
   const courtCount = courts.data?.filter((court) => court.is_active).length ?? 0
   const courtTotal = courts.data?.length ?? 0
   const refresh = () => void client.invalidateQueries({ queryKey: ['admin-bookings'] })
+  const notify = (message: string, variant: 'success' | 'error' = 'success') => setToast({ message, variant })
   const signOut = () => void supabase.auth.signOut().then(() => navigate('/admin/login'))
 
   if (auth.isLoading || (auth.data && !accessChecked)) return <div className="py-20 text-center">Checking admin access…</div>
@@ -73,7 +75,6 @@ export function AdminPage() {
           <div><h1 className="text-3xl font-bold tracking-tight text-[#0f1e17]">Bookings</h1><p className="mt-1 text-sm text-[#526058]">Manage reservations and payment status.</p></div>
           <div className="flex flex-wrap items-center gap-3"><LiveClock /><button onClick={() => setNewReservationOpen(true)} className="inline-flex items-center gap-2 rounded-lg bg-[#103b2b] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#186b48]"><Plus className="h-4 w-4" aria-hidden />New Reservation</button></div>
         </header>
-        {message && <div className="mt-4 flex items-start justify-between gap-3 rounded-lg border border-[#dce3de] bg-white p-3 text-sm font-semibold"><span>{message}</span><button onClick={() => setMessage('')} aria-label="Dismiss" className="font-black">×</button></div>}
         {bookings.isError && <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-[#fdeeee] p-3 text-sm text-[#a42a2a]">Bookings could not be loaded: {bookings.error.message}</p>}
         {courts.isError && <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-[#fdeeee] p-3 text-sm text-[#a42a2a]">Court totals could not be loaded: {courts.error.message}</p>}
         <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -106,12 +107,12 @@ export function AdminPage() {
         </section>
       </> : <>
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[#e5eae5] pb-5"><div><h1 className="text-3xl font-bold tracking-tight text-[#0f1e17]">Settings</h1><p className="mt-1 text-sm text-[#526058]">Manage your booking and payment preferences.</p></div><LiveClock /></header>
-        {message && <div className="mt-4 rounded-lg border border-[#dce3de] bg-white p-3 text-sm font-semibold">{message}</div>}
-        <div className="mt-6"><SettingsPanel onSaved={() => setMessage('Settings saved.')} /></div>
+        <div className="mt-6"><SettingsPanel onSaved={() => notify('Settings saved.')} onUploaded={() => notify('GCash QR image uploaded.')} /></div>
       </>}
     </main>
-    {selected && <BookingModal booking={selected} onClose={() => setSelectedId(null)} onChanged={refresh} notify={setMessage} />}
-    {newReservationOpen && <NewReservationModal onClose={() => setNewReservationOpen(false)} onCreated={() => { setNewReservationOpen(false); refresh(); setMessage('Reservation created.') }} />}
+    {selected && <BookingModal booking={selected} onClose={() => setSelectedId(null)} onChanged={refresh} notify={notify} />}
+    {newReservationOpen && <NewReservationModal onClose={() => setNewReservationOpen(false)} onCreated={() => { setNewReservationOpen(false); refresh(); notify('Reservation created.') }} />}
+    {toast && <Toast message={toast.message} variant={toast.variant} onClose={() => setToast(null)} />}
   </div>
 }
 
@@ -147,12 +148,12 @@ function NewReservationModal({ onClose, onCreated }: { onClose: () => void; onCr
   })
   const settings = useQuery({
     queryKey: ['new-reservation-settings'],
-    queryFn: async () => { const result = await supabase.from('settings').select('hourly_rate,open_hour,close_hour').eq('id', 1).single(); if (result.error) throw result.error; return result.data },
+    queryFn: async () => { const result = await supabase.from('settings').select('day_hourly_rate,night_hourly_rate,open_hour,close_hour').eq('id', 1).single(); if (result.error) throw result.error; return result.data },
   })
   useEffect(() => { setHours([]) }, [date, court])
   useEffect(() => { const handleKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }; window.addEventListener('keydown', handleKey); return () => window.removeEventListener('keydown', handleKey) }, [busy, onClose])
   const blocked = new Set((availability.data ?? []).filter((slot) => slot.court_id === court).map((slot) => slot.slot_hour))
-  const openHour = settings.data?.open_hour ?? 5
+  const openHour = settings.data?.open_hour ?? 0
   const closeHour = settings.data?.close_hour ?? 24
   const save = async (confirmed = false) => {
     if (courts.isError || settings.isError || availability.isError) { setError('Reservation data could not be loaded. Please close this dialog and try again.'); return }
@@ -165,11 +166,11 @@ function NewReservationModal({ onClose, onCreated }: { onClose: () => void; onCr
     const insert = await supabase.from('bookings').insert({
       id, access_token: crypto.randomUUID().replace(/-/g, ''), court_id: court, booking_date: date,
       first_name: firstName.trim(), last_name: lastName.trim(), phone: phone.trim() || null, email: email.trim().toLowerCase() || null,
-      total_hours: hours.length, hourly_rate: Number(settings.data?.hourly_rate ?? 0), total_amount: Number(settings.data?.hourly_rate ?? 0) * hours.length,
+      total_hours: hours.length, hourly_rate: totalForHours(hours, settings.data) / hours.length, total_amount: totalForHours(hours, settings.data),
       status: 'confirmed', admin_notes: notes.trim() || null, submitted_at: new Date().toISOString(), confirmed_at: new Date().toISOString(),
     })
     if (insert.error) { setError(friendlyError(insert.error)); setBusy(false); return }
-    const slotInsert = await supabase.from('booking_slots').insert(hours.map((slot_hour) => ({ booking_id: id, court_id: court, booking_date: date, slot_hour, is_active: true })))
+    const slotInsert = await supabase.from('booking_slots').insert(hours.map((slot_hour) => ({ booking_id: id, court_id: court, booking_date: date, slot_hour, hourly_rate: rateForHour(slot_hour, settings.data), is_active: true })))
     if (slotInsert.error) {
       const cleanup = await supabase.from('bookings').delete().eq('id', id)
       setError(cleanup.error ? `${friendlyError(slotInsert.error)} The incomplete reservation could not be removed: ${cleanup.error.message}` : friendlyError(slotInsert.error))
@@ -195,11 +196,11 @@ function NewReservationModal({ onClose, onCreated }: { onClose: () => void; onCr
           <label className="text-xs font-bold text-[#526058]">Court<select value={court} onChange={(event) => setCourt(Number(event.target.value))} className={input}>{(courts.data ?? []).map(({ id }) => <option key={id} value={id}>Court {id}</option>)}</select></label>
         </div>
         <div>
-          <div className="flex items-baseline justify-between"><p className="text-xs font-bold uppercase tracking-wider text-[#526058]">Available time slots</p><p className="text-xs text-[#708077]">{hours.length} selected · {money(Number(settings.data?.hourly_rate ?? 0) * hours.length)}</p></div>
+          <div className="flex items-baseline justify-between"><p className="text-xs font-bold uppercase tracking-wider text-[#526058]">Available time slots</p><p className="text-xs text-[#708077]">{hours.length} selected · {money(settings.data ? totalForHours(hours, settings.data) : 0)}</p></div>
           {availability.isError && <p role="alert" className="mt-2 text-sm text-red-700">Availability could not be loaded. Try again before creating a reservation.</p>}
           {(courts.isError || settings.isError) && <p role="alert" className="mt-2 text-sm text-red-700">Court or pricing settings could not be loaded. Try closing and reopening this form.</p>}
           {!courts.isLoading && !courts.isError && !courts.data?.length && <p role="alert" className="mt-2 text-sm text-red-700">There are no active courts available to reserve.</p>}
-          <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">{Array.from({ length: Math.max(0, closeHour - openHour) }, (_, index) => index + openHour).map((hour) => { const past = isPastSlot(date, hour); const unavailable = blocked.has(hour) || past; const selected = hours.includes(hour); return <button key={hour} type="button" disabled={unavailable || availability.isLoading} onClick={() => setHours((current) => selected ? current.filter((value) => value !== hour) : [...current, hour].sort((a, b) => a - b))} className={`rounded-lg border px-2 py-2 text-xs font-semibold transition ${unavailable ? 'cursor-not-allowed border-[#e5eae5] bg-[#f2f4f2] text-[#a0aaa4] line-through' : selected ? 'border-[#103b2b] bg-[#103b2b] text-white' : 'border-[#dce3de] bg-white text-[#526058] hover:border-[#2e7d58]'}`}>{timeLabel(hour)}</button> })}</div>
+          <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">{Array.from({ length: Math.max(0, closeHour - openHour) }, (_, index) => index + openHour).map((hour) => { const past = isPastSlot(date, hour); const unavailable = blocked.has(hour) || past; const selected = hours.includes(hour); const rate = settings.data ? rateForHour(hour, settings.data) : 0; return <button key={hour} type="button" disabled={unavailable || availability.isLoading} onClick={() => setHours((current) => selected ? current.filter((value) => value !== hour) : [...current, hour].sort((a, b) => a - b))} className={`rounded-lg border px-2 py-2 text-xs font-semibold transition ${unavailable ? 'cursor-not-allowed border-[#e5eae5] bg-[#f2f4f2] text-[#a0aaa4] line-through' : selected ? 'border-[#103b2b] bg-[#103b2b] text-white' : 'border-[#dce3de] bg-white text-[#526058] hover:border-[#2e7d58]'}`}>{timeLabel(hour)} · {money(rate)}</button> })}</div>
           {availability.isLoading && <p className="mt-2 text-xs text-[#708077]">Loading availability…</p>}
         </div>
         <label className="block text-xs font-bold text-[#526058]">Admin notes<textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} className={input} /></label>
@@ -207,19 +208,20 @@ function NewReservationModal({ onClose, onCreated }: { onClose: () => void; onCr
       </div>
       <footer className="flex justify-end gap-2 border-t border-[#e5eae5] bg-white px-5 py-4 sm:px-6"><button onClick={onClose} disabled={busy} className="rounded-lg border border-[#d0dcd4] px-4 py-2.5 text-sm font-bold text-[#526058]">Cancel</button><button onClick={() => void save()} disabled={busy || availability.isLoading || settings.isLoading || courts.isLoading || availability.isError || settings.isError || courts.isError || !courts.data?.length || !hours.length} className="rounded-lg bg-[#103b2b] px-5 py-2.5 text-sm font-bold text-white hover:bg-[#186b48] disabled:opacity-50">{busy ? 'Creating…' : 'Create reservation'}</button></footer>
     </section>
-    {confirmOpen && <ConfirmDialog title="Create this reservation?" description={`This will create a confirmed booking for ${firstName.trim()} ${lastName.trim()}.`} confirmLabel="Create reservation" details={<div className="rounded-lg border border-[#e5eae5] bg-white p-3 text-sm text-[#526058]"><p className="font-semibold text-[#103b2b]">{dateLabel(date)} · Court {court}</p><p className="mt-1">{hours.map(timeLabel).join(', ')}</p><p className="mt-2 font-bold text-[#103b2b]">{money(Number(settings.data?.hourly_rate ?? 0) * hours.length)}</p></div>} onCancel={() => setConfirmOpen(false)} onConfirm={() => save(true)} />}
+    {confirmOpen && <ConfirmDialog title="Create this reservation?" description={`This will create a confirmed booking for ${firstName.trim()} ${lastName.trim()}.`} confirmLabel="Create reservation" details={<div className="rounded-lg border border-[#e5eae5] bg-white p-3 text-sm text-[#526058]"><p className="font-semibold text-[#103b2b]">{dateLabel(date)} · Court {court}</p><p className="mt-1">{hours.map(timeLabel).join(', ')}</p><p className="mt-2 font-bold text-[#103b2b]">{money(settings.data ? totalForHours(hours, settings.data) : 0)}</p></div>} onCancel={() => setConfirmOpen(false)} onConfirm={() => save(true)} />}
   </div>
 }
 
-function BookingModal({ booking, onClose, onChanged, notify }: { booking: Booking; onClose: () => void; onChanged: () => void; notify: (message: string) => void }) {
+function BookingModal({ booking, onClose, onChanged, notify }: { booking: Booking; onClose: () => void; onChanged: () => void; notify: (message: string, variant?: 'success' | 'error') => void }) {
   const [mode, setMode] = useState<'view' | 'edit' | 'move'>('view'); const [busy, setBusy] = useState(false); const [error, setError] = useState('')
   const [confirmation, setConfirmation] = useState<{ title: string; description: string; confirmLabel: string; tone?: 'primary' | 'danger'; action: () => Promise<void> } | null>(null)
   const [form, setForm] = useState({ first_name: booking.first_name ?? '', last_name: booking.last_name ?? '', phone: booking.phone ?? '', email: booking.email ?? '', admin_notes: booking.admin_notes ?? '' })
   const [move, setMove] = useState({ date: booking.booking_date, court: booking.court_id, hours: [] as number[] })
   useEffect(() => { const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey) }, [onClose])
-  const slots = useQuery({ queryKey: ['booking-slots', booking.id, booking.booking_date, booking.court_id], queryFn: async () => { const result = await supabase.from('booking_slots').select('slot_hour').eq('booking_id', booking.id).order('slot_hour'); if (result.error) throw result.error; return result.data.map((row) => row.slot_hour) } })
+  const slots = useQuery({ queryKey: ['booking-slots', booking.id, booking.booking_date, booking.court_id], queryFn: async () => { const result = await supabase.from('booking_slots').select('slot_hour,hourly_rate').eq('booking_id', booking.id).order('slot_hour'); if (result.error) throw result.error; return result.data } })
+  const pricing = useQuery({ queryKey: ['admin-booking-pricing'], queryFn: async () => { const result = await supabase.from('settings').select('day_hourly_rate,night_hourly_rate').eq('id', 1).single(); if (result.error) throw result.error; return result.data } })
   const receipt = useQuery({ queryKey: ['receipt', booking.receipt_path], enabled: Boolean(booking.receipt_path), queryFn: async () => { const result = await supabase.storage.from('receipts').createSignedUrl(booking.receipt_path!, 600); if (result.error) throw result.error; return result.data.signedUrl } })
-  useEffect(() => { if (slots.data) setMove((old) => ({ ...old, hours: slots.data })) }, [slots.data])
+  useEffect(() => { if (slots.data) setMove((old) => ({ ...old, hours: slots.data.map((slot) => slot.slot_hour) })) }, [slots.data])
   const run = async (action: () => PromiseLike<{ error: { message: string } | null }>, success: string, close = false) => { setBusy(true); setError(''); const result = await action(); setBusy(false); if (result.error) { setError(friendlyError(result.error) === 'Something went wrong. Please try again.' ? result.error.message : friendlyError(result.error)); return }; notify(success); onChanged(); if (close) onClose(); else setMode('view') }
   const setStatus = (next: BookingStatus, label: string) => run(() => supabase.from('bookings').update({ status: next }).eq('id', booking.id), `${booking.reference_code} ${label}.`)
   const save = () => run(() => supabase.from('bookings').update({ first_name: form.first_name.trim(), last_name: form.last_name.trim(), phone: form.phone.trim(), email: form.email.trim(), admin_notes: form.admin_notes }).eq('id', booking.id), 'Booking details updated.')
@@ -231,7 +233,7 @@ function BookingModal({ booking, onClose, onChanged, notify }: { booking: Bookin
       if (result.error) { setError(friendlyError(result.error)); return }
       if (result.data) {
         const cleanup = await supabase.storage.from('receipts').remove([result.data])
-        if (cleanup.error) notify(`${booking.reference_code} was deleted, but its receipt file could not be removed: ${friendlyError(cleanup.error)}`)
+        if (cleanup.error) notify(`${booking.reference_code} was deleted, but its receipt file could not be removed: ${friendlyError(cleanup.error)}`, 'error')
         else notify(`${booking.reference_code} deleted.`)
       } else notify(`${booking.reference_code} deleted.`)
       onChanged()
@@ -244,7 +246,7 @@ function BookingModal({ booking, onClose, onChanged, notify }: { booking: Bookin
   }
   const locked = booking.status === 'rejected' || booking.status === 'cancelled'
   const movePast = move.hours.some((hour) => isPastSlot(move.date, hour))
-  const rows: [string, string][] = [['Reference', booking.reference_code], ['Date', dateLabel(booking.booking_date)], ['Court', `Court ${booking.court_id}`], ['Total', `${money(booking.total_amount)} · ${booking.total_hours}h at ${money(booking.hourly_rate)}`], ['Phone', booking.phone || '—'], ['Email', booking.email || '—'], ['Submitted', booking.submitted_at ? new Date(booking.submitted_at).toLocaleString() : '—'], ['Notes', booking.admin_notes || '—']]
+  const rows: [string, string][] = [['Reference', booking.reference_code], ['Date', dateLabel(booking.booking_date)], ['Court', `Court ${booking.court_id}`], ['Total', `${money(booking.total_amount)} · ${booking.total_hours}h`], ['Phone', booking.phone || '—'], ['Email', booking.email || '—'], ['Submitted', booking.submitted_at ? new Date(booking.submitted_at).toLocaleString() : '—'], ['Notes', booking.admin_notes || '—']]
   return <div className="fixed inset-0 z-40 flex items-end justify-center bg-[#002418]/45 sm:items-center sm:p-5">
     <button aria-label="Close" onClick={onClose} className="absolute inset-0" />
     <div role="dialog" aria-modal="true" className="relative flex max-h-[94vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-2xl border border-[#e5eae5] bg-[#f8faf8] shadow-[0_20px_40px_-8px_rgba(16,59,43,0.2)] sm:rounded-2xl">
@@ -253,11 +255,11 @@ function BookingModal({ booking, onClose, onChanged, notify }: { booking: Bookin
         {error && <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-[#fdeeee] p-3 text-sm text-[#a42a2a]">{error}</p>}
         {mode === 'view' && <div className="space-y-5">
           <dl className="grid gap-4 rounded-xl border border-[#e5eae5] bg-white p-4 text-sm sm:grid-cols-2 sm:p-5">{rows.map(([label, value]) => <div key={label}><dt className="text-[11px] font-bold uppercase tracking-wider text-[#708077]">{label}</dt><dd className="mt-1 break-words font-semibold text-[#191c1b]">{value}</dd></div>)}</dl>
-          <div className="rounded-xl border border-[#e5eae5] bg-white p-4 sm:p-5"><p className="text-[11px] font-bold uppercase tracking-wider text-[#708077]">Time slots</p><div className="mt-3 flex flex-wrap gap-2">{slots.data?.length ? slots.data.map((hour) => <span key={hour} className="rounded-full bg-[#eaf6ee] px-3 py-1.5 text-xs font-bold text-[#1b633f]">{timeLabel(hour)}</span>) : <span className="text-sm text-[#708077]">{slots.isLoading ? 'Loading…' : slots.isError ? 'Time slots could not be loaded.' : 'No active slots'}</span>}</div></div>
+          <div className="rounded-xl border border-[#e5eae5] bg-white p-4 sm:p-5"><p className="text-[11px] font-bold uppercase tracking-wider text-[#708077]">Time slots</p><div className="mt-3 flex flex-wrap gap-2">{slots.data?.length ? slots.data.map((slot) => <span key={slot.slot_hour} className="rounded-full bg-[#eaf6ee] px-3 py-1.5 text-xs font-bold text-[#1b633f]">{timeLabel(slot.slot_hour)} · {money(Number(slot.hourly_rate))}</span>) : <span className="text-sm text-[#708077]">{slots.isLoading ? 'Loading…' : slots.isError ? 'Time slots could not be loaded.' : 'No active slots'}</span>}</div></div>
           <div className="rounded-xl border border-[#e5eae5] bg-white p-4 sm:p-5"><p className="text-[11px] font-bold uppercase tracking-wider text-[#708077]">Payment receipt</p>{booking.receipt_path ? receipt.data ? <a href={receipt.data} target="_blank" rel="noreferrer"><img src={receipt.data} alt="Payment receipt" className="mt-3 max-h-80 rounded-lg border border-[#e5eae5] object-contain" /></a> : <p className="mt-2 text-sm text-[#708077]">{receipt.isError ? 'Receipt could not be loaded.' : 'Loading receipt…'}</p> : <p className="mt-2 text-sm text-[#708077]">No receipt uploaded.</p>}</div>
         </div>}
         {mode === 'edit' && <div className="grid gap-4 rounded-xl border border-[#e5eae5] bg-white p-4 sm:grid-cols-2 sm:p-5">{(['first_name', 'last_name', 'phone', 'email'] as const).map((key) => <label key={key} className="text-xs font-bold capitalize text-[#526058]">{key.replace('_', ' ')}<input value={form[key]} onChange={(event) => setForm({ ...form, [key]: event.target.value })} className={`${field} mt-1 font-normal text-[#191c1b]`} /></label>)}<label className="text-xs font-bold text-[#526058] sm:col-span-2">Admin notes<textarea rows={3} value={form.admin_notes} onChange={(event) => setForm({ ...form, admin_notes: event.target.value })} className={`${field} mt-1 font-normal text-[#191c1b]`} /></label></div>}
-        {mode === 'move' && <div className="space-y-4 rounded-xl border border-[#e5eae5] bg-white p-4 sm:p-5"><div className="grid gap-4 sm:grid-cols-2"><label className="text-xs font-bold text-[#526058]">Date<input type="date" min={todayManila()} value={move.date} onChange={(event) => setMove({ ...move, date: event.target.value, hours: move.hours.filter((hour) => !isPastSlot(event.target.value, hour)) })} className={`${field} mt-1 font-normal text-[#191c1b]`} /></label><label className="text-xs font-bold text-[#526058]">Court<select value={move.court} onChange={(event) => setMove({ ...move, court: Number(event.target.value) })} className={`${field} mt-1 font-normal text-[#191c1b]`}><option value={1}>Court 1</option><option value={2}>Court 2</option></select></label></div><div><p className="mb-3 text-xs font-bold uppercase tracking-wider text-[#526058]">Time slots</p><div className="grid grid-cols-3 gap-2 sm:grid-cols-4">{Array.from({ length: 19 }, (_, index) => index + 5).map((hour) => { const on = move.hours.includes(hour); const past = isPastSlot(move.date, hour); return <button key={hour} type="button" disabled={past} onClick={() => setMove({ ...move, hours: on ? move.hours.filter((value) => value !== hour) : [...move.hours, hour].sort((a, b) => a - b) })} className={`rounded-lg border px-2 py-2 text-xs font-bold ${past ? 'cursor-not-allowed border-dashed border-[#e5eae5] bg-[#f2f4f2] text-[#a0aaa4] line-through' : on ? 'border-[#103b2b] bg-[#103b2b] text-white' : 'border-[#dce3de] text-[#526058] hover:border-[#2e7d58]'}`}>{timeLabel(hour)}</button> })}</div></div></div>}
+        {mode === 'move' && <div className="space-y-4 rounded-xl border border-[#e5eae5] bg-white p-4 sm:p-5"><div className="grid gap-4 sm:grid-cols-2"><label className="text-xs font-bold text-[#526058]">Date<input type="date" min={todayManila()} value={move.date} onChange={(event) => setMove({ ...move, date: event.target.value, hours: move.hours.filter((hour) => !isPastSlot(event.target.value, hour)) })} className={`${field} mt-1 font-normal text-[#191c1b]`} /></label><label className="text-xs font-bold text-[#526058]">Court<select value={move.court} onChange={(event) => setMove({ ...move, court: Number(event.target.value) })} className={`${field} mt-1 font-normal text-[#191c1b]`}><option value={1}>Court 1</option><option value={2}>Court 2</option></select></label></div><div><p className="mb-3 text-xs font-bold uppercase tracking-wider text-[#526058]">Time slots · {money(pricing.data ? totalForHours(move.hours, pricing.data) : 0)}</p><div className="grid grid-cols-3 gap-2 sm:grid-cols-4">{Array.from({ length: 24 }, (_, hour) => { const on = move.hours.includes(hour); const past = isPastSlot(move.date, hour); const rate = pricing.data ? rateForHour(hour, pricing.data) : 0; return <button key={hour} type="button" disabled={past} onClick={() => setMove({ ...move, hours: on ? move.hours.filter((value) => value !== hour) : [...move.hours, hour].sort((a, b) => a - b) })} className={`rounded-lg border px-2 py-2 text-xs font-bold ${past ? 'cursor-not-allowed border-dashed border-[#e5eae5] bg-[#f2f4f2] text-[#a0aaa4] line-through' : on ? 'border-[#103b2b] bg-[#103b2b] text-white' : 'border-[#dce3de] text-[#526058] hover:border-[#2e7d58]'}`}>{timeLabel(hour)} · {money(rate)}</button> })}</div></div></div>}
       </div>
       <div className="flex flex-wrap items-center gap-2 border-t border-[#e5eae5] bg-white px-5 py-4 sm:px-6">
         {mode === 'view' && <>
@@ -275,10 +277,10 @@ function BookingModal({ booking, onClose, onChanged, notify }: { booking: Bookin
 
 function DayView({ date }: { date: string }) {
   const query = useQuery({ queryKey: ['day-view', date], queryFn: async () => { const result = await supabase.from('booking_slots').select('*').eq('booking_date', date).eq('is_active', true); if (result.error) throw result.error; return result.data } })
-  return <div className="rounded-2xl bg-white p-4 shadow-soft sm:p-5"><h2 className="text-lg font-black sm:text-xl">{dateLabel(date)}</h2><div className="mt-4 grid grid-cols-2 gap-3">{[1, 2].map((court) => <div key={court}><h3 className="mb-2 font-bold text-forest">Court {court}</h3>{Array.from({ length: 19 }, (_, index) => index + 5).map((hour) => { const occupied = query.data?.some((slot) => slot.court_id === court && slot.slot_hour === hour); return <div key={hour} className={`mb-1 rounded px-2 py-2 text-xs ${occupied ? 'bg-forest text-white' : 'bg-slate-100 text-slate-500'}`}>{timeLabel(hour)} · {occupied ? 'Booked' : 'Open'}</div> })}</div>)}</div></div>
+  return <div className="rounded-2xl bg-white p-4 shadow-soft sm:p-5"><h2 className="text-lg font-black sm:text-xl">{dateLabel(date)}</h2><div className="mt-4 grid grid-cols-2 gap-3">{[1, 2].map((court) => <div key={court}><h3 className="mb-2 font-bold text-forest">Court {court}</h3>{Array.from({ length: 24 }, (_, hour) => { const occupied = query.data?.some((slot) => slot.court_id === court && slot.slot_hour === hour); return <div key={hour} className={`mb-1 rounded px-2 py-2 text-xs ${occupied ? 'bg-forest text-white' : 'bg-slate-100 text-slate-500'}`}>{timeLabel(hour)} · {occupied ? 'Booked' : 'Open'}</div> })}</div>)}</div></div>
 }
 
-function SettingsPanel({ onSaved }: { onSaved: () => void }) {
+function SettingsPanel({ onSaved, onUploaded }: { onSaved: () => void; onUploaded: () => void }) {
   const query = useQuery({ queryKey: ['admin-settings'], queryFn: async () => { const result = await supabase.from('settings').select('*').eq('id', 1).single(); if (result.error) throw result.error; return result.data as Settings } })
   const notifications = useQuery({ queryKey: ['admin-notification-settings'], queryFn: async () => { const result = await supabase.from('notification_settings').select('*').eq('id', 1).single(); if (result.error) throw result.error; return result.data } })
   const [form, setForm] = useState<Partial<Settings>>({})
@@ -294,10 +296,12 @@ function SettingsPanel({ onSaved }: { onSaved: () => void }) {
   const save = async (confirmed = false) => {
     const email = ownerEmail.trim()
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { setError('Enter a valid owner notification email address.'); return }
-    if (!Number.isFinite(Number(form.hourly_rate)) || Number(form.hourly_rate) <= 0 || !Number.isFinite(Number(form.hold_minutes)) || Number(form.hold_minutes) <= 0) { setError('Hourly rate and hold duration must be positive numbers.'); return }
+    if (!Number.isFinite(Number(form.day_hourly_rate)) || Number(form.day_hourly_rate) <= 0 || !Number.isFinite(Number(form.night_hourly_rate)) || Number(form.night_hourly_rate) <= 0 || !Number.isFinite(Number(form.hold_minutes)) || Number(form.hold_minutes) <= 0) { setError('Both hourly rates and the hold duration must be positive numbers.'); return }
     if (!confirmed) { setConfirmOpen(true); return }
     setSaving(true); setError('')
-    const result = await supabase.from('settings').update({ hourly_rate: Number(form.hourly_rate), hold_minutes: Number(form.hold_minutes), gcash_account_name: form.gcash_account_name, gcash_number: form.gcash_number, gcash_qr_path: form.gcash_qr_path }).eq('id', 1)
+    const dayRate = Number(form.day_hourly_rate)
+    const nightRate = Number(form.night_hourly_rate)
+    const result = await supabase.from('settings').update({ hourly_rate: (dayRate + nightRate) / 2, day_hourly_rate: dayRate, night_hourly_rate: nightRate, open_hour: 0, close_hour: 24, hold_minutes: Number(form.hold_minutes), gcash_account_name: form.gcash_account_name, gcash_number: form.gcash_number, gcash_qr_path: form.gcash_qr_path }).eq('id', 1)
     if (result.error) { setSaving(false); setError(friendlyError(result.error)); return }
     const recipient = await supabase.from('notification_settings').update({ owner_notification_email: email || null }).eq('id', 1)
     setSaving(false)
@@ -311,14 +315,14 @@ function SettingsPanel({ onSaved }: { onSaved: () => void }) {
     const result = await supabase.storage.from('assets').upload(path, file, { upsert: true, contentType: file.type })
     setUploading(false)
     if (result.error) setError(friendlyError(result.error))
-    else setForm((old) => ({ ...old, gcash_qr_path: path }))
+    else { setForm((old) => ({ ...old, gcash_qr_path: path })); onUploaded() }
   }
   return <div className="max-w-3xl overflow-hidden rounded-2xl border border-[#e5eae5] bg-white shadow-[0_2px_8px_rgba(16,59,43,0.04)]">
     <div className="border-b border-[#e5eae5] px-5 py-5 sm:px-6"><h2 className="text-xl font-bold text-[#103b2b]">Business settings</h2><p className="mt-1 text-sm text-[#526058]">Update court pricing, reservation holds, and payment details.</p></div>
     <div className="space-y-5 p-5 sm:p-6">
       {error && <p role="alert" className="rounded-lg border border-red-200 bg-[#fdeeee] p-3 text-sm text-[#a42a2a]">{error}</p>}
       <div className="grid gap-4 sm:grid-cols-2">
-        {([['gcash_account_name', 'GCash account name', 'text'], ['gcash_number', 'GCash number', 'tel'], ['hourly_rate', 'Hourly rate (₱)', 'number'], ['hold_minutes', 'Reservation hold (minutes)', 'number']] as const).map(([key, label, type]) => <label key={key} className="text-xs font-bold text-[#526058]">{label}<input type={type} min={type === 'number' ? 1 : undefined} step={type === 'number' ? 1 : undefined} value={String(form[key] ?? '')} onChange={(event) => setForm((old) => ({ ...old, [key]: type === 'number' ? Number(event.target.value) : event.target.value }))} className={`${field} mt-1`} /></label>)}
+        {([['gcash_account_name', 'GCash account name', 'text'], ['gcash_number', 'GCash number', 'tel'], ['day_hourly_rate', 'Day rate · slots starting 5:00 AM–4:00 PM (₱)', 'number'], ['night_hourly_rate', 'Night rate · slots starting 5:00 PM–4:00 AM (₱)', 'number'], ['hold_minutes', 'Reservation hold (minutes)', 'number']] as const).map(([key, label, type]) => <label key={key} className="text-xs font-bold text-[#526058]">{label}<input type={type} min={type === 'number' ? 1 : undefined} step={type === 'number' ? 1 : undefined} value={String(form[key] ?? '')} onChange={(event) => setForm((old) => ({ ...old, [key]: type === 'number' ? Number(event.target.value) : event.target.value }))} className={`${field} mt-1`} /></label>)}
       </div>
       <div className="rounded-xl border border-[#e5eae5] bg-[#f8faf8] p-4">
         <label className="block text-xs font-bold text-[#526058]">Owner notification email<input type="email" value={ownerEmail} onChange={(event) => setOwnerEmail(event.target.value)} placeholder="owner@example.com" className={`${field} mt-1`} /></label>

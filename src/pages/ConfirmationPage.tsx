@@ -7,7 +7,7 @@ import { friendlyError } from '../lib/errors'
 import { dateLabel, money, timeLabel } from '../lib/format'
 
 type MyBooking = {
-  booking_id: string; status: string; booking_date: string; court_name: string; hours: number[]; hourly_rate: number; total_amount: number
+  booking_id: string; status: string; booking_date: string; court_name: string; hours: number[]; hourly_rate: number; slot_rates?: number[]; total_amount: number
   first_name: string | null; last_name: string | null; reference_code?: string | null; email?: string | null; phone?: string | null; submitted_at?: string | null
 }
 
@@ -45,6 +45,11 @@ export function ConfirmationPage() {
   const StatusIcon = info.icon
   const name = [data.first_name, data.last_name].filter(Boolean).join(' ')
   const hours = data.hours ?? []
+  const priceBreakdown = new Map<number, number>()
+  hours.forEach((_, index) => {
+    const rate = data.slot_rates?.[index] ?? data.hourly_rate
+    priceBreakdown.set(rate, (priceBreakdown.get(rate) ?? 0) + 1)
+  })
   const copyLink = async () => { await navigator.clipboard.writeText(window.location.href); setCopied(true); setTimeout(() => setCopied(false), 2000) }
 
   return <div className="mx-auto max-w-2xl space-y-5 px-4 py-8 sm:px-6">
@@ -67,7 +72,7 @@ export function ConfirmationPage() {
       </dl>
       <div className="mt-6 rounded-lg bg-[#f8faf8] p-4"><p className="text-[11px] font-bold uppercase tracking-wider text-[#708077]">Reserved time</p><div className="mt-2 flex flex-wrap gap-2">{hours.length ? hours.map((hour) => <span key={hour} className="rounded-full bg-[#eaf6ee] px-3 py-1.5 text-xs font-bold text-[#1b633f]">{timeLabel(hour)} – {timeLabel(hour + 1)}</span>) : <span className="text-sm text-[#708077]">No time slots found for this booking.</span>}</div></div>
       <div className="mt-5 space-y-2 border-t border-[#e5eae5] pt-4 text-sm">
-        <div className="flex justify-between text-[#526058]"><span>{hours.length} hour{hours.length === 1 ? '' : 's'} × {money(data.hourly_rate)}</span><strong className="text-[#191c1b]">{money(data.total_amount)}</strong></div>
+        {[...priceBreakdown].map(([rate, count]) => <div key={rate} className="flex justify-between text-[#526058]"><span>{count} hour{count === 1 ? '' : 's'} × {money(rate)}</span><strong className="text-[#191c1b]">{money(rate * count)}</strong></div>)}
         <div className="flex justify-between text-lg font-bold text-[#103b2b]"><span>TOTAL</span><span>{money(data.total_amount)}</span></div>
       </div>
     </div>

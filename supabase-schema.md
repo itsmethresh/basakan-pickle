@@ -1,5 +1,5 @@
--- Basakan Pickle - complete Supabase setup.
--- Paste this ENTIRE file into Supabase > SQL Editor and press Run. It is safe to re-run.
+-- Basakan Pickle - destructive Supabase setup for a new project.
+-- Paste this ENTIRE file into Supabase > SQL Editor and press Run.
 -- WARNING: this rebuilds the bookings, booking_slots and booking_holds tables (existing bookings are deleted).
 -- Your Supabase Auth users, courts, settings and admin_users rows are kept.
 
@@ -36,9 +36,11 @@ create table if not exists public.courts (
 create table if not exists public.settings (
   id integer primary key default 1,
   business_name text not null default 'Basakan Pickle',
-  hourly_rate numeric not null default 300,
-  open_hour integer not null default 6,
-  close_hour integer not null default 22,
+  hourly_rate numeric not null default 175,
+  day_hourly_rate numeric not null default 150,
+  night_hourly_rate numeric not null default 200,
+  open_hour integer not null default 0,
+  close_hour integer not null default 24,
   hold_minutes integer not null default 10,
   gcash_qr_path text,
   gcash_account_name text,
@@ -47,9 +49,11 @@ create table if not exists public.settings (
 );
 
 alter table public.settings add column if not exists business_name text not null default 'Basakan Pickle';
-alter table public.settings add column if not exists hourly_rate numeric not null default 300;
-alter table public.settings add column if not exists open_hour integer not null default 6;
-alter table public.settings add column if not exists close_hour integer not null default 22;
+alter table public.settings add column if not exists hourly_rate numeric not null default 175;
+alter table public.settings add column if not exists day_hourly_rate numeric not null default 150;
+alter table public.settings add column if not exists night_hourly_rate numeric not null default 200;
+alter table public.settings add column if not exists open_hour integer not null default 0;
+alter table public.settings add column if not exists close_hour integer not null default 24;
 alter table public.settings add column if not exists hold_minutes integer not null default 10;
 alter table public.settings add column if not exists gcash_qr_path text;
 alter table public.settings add column if not exists gcash_account_name text;
@@ -69,6 +73,11 @@ create table if not exists public.notification_settings (
 );
 
 insert into public.settings (id) values (1) on conflict (id) do nothing;
+update public.settings
+set hourly_rate = (day_hourly_rate + night_hourly_rate) / 2,
+    open_hour = 0,
+    close_hour = 24
+where id = 1;
 insert into public.notification_settings (id) values (1) on conflict (id) do nothing;
 insert into public.courts (id, name)
 select v.id, v.name from (values (1, 'Court 1'), (2, 'Court 2')) as v(id, name)
@@ -81,7 +90,8 @@ create table public.booking_holds (
   court_id integer not null references public.courts(id),
   booking_date date not null,
   hours integer[] not null,
-  hourly_rate numeric not null,
+  hourly_rate numeric not null check (hourly_rate >= 0),
+  slot_rates numeric[] not null check (cardinality(slot_rates) = cardinality(hours)),
   total_hours integer not null,
   total_amount numeric not null,
   expires_at timestamptz not null,
@@ -101,7 +111,7 @@ create table public.bookings (
   phone text,
   email text,
   total_hours integer not null,
-  hourly_rate numeric not null,
+  hourly_rate numeric not null check (hourly_rate >= 0),
   total_amount numeric not null,
   receipt_path text,
   status text not null default 'pending' check (status in ('held','pending','confirmed','rejected','cancelled','expired')),
@@ -119,6 +129,7 @@ create table public.booking_slots (
   court_id integer not null references public.courts(id),
   booking_date date not null,
   slot_hour integer not null,
+  hourly_rate numeric not null,
   is_active boolean not null default true
 );
 
@@ -128,6 +139,11 @@ create index booking_slots_booking_idx on public.booking_slots (booking_id);
 create index bookings_date_idx on public.bookings (booking_date);
 
 -- Helpers
+
+create or replace function public.rate_for_hour(p_hour integer, p_day_rate numeric, p_night_rate numeric)
+returns numeric language sql immutable strict set search_path = pg_catalog as $$
+  select case when p_hour between 5 and 16 then p_day_rate else p_night_rate end
+$$;
 
 create or replace function public.is_admin()
 returns boolean language sql stable security definer set search_path = public as $$
@@ -170,14 +186,16 @@ declare
   now_local timestamp := (now() at time zone 'Asia/Manila');
   h integer;
   hold public.booking_holds;
-  n integer;
+  total numeric;
+  rates numeric[];
+  total numeric;
 begin
   select * into cfg from public.settings where id = 1;
   if cfg.id is null then raise exception 'SETTINGS_UNAVAILABLE'; end if;
   if not exists (select 1 from public.courts where id = p_court_id and is_active) then raise exception 'INVALID_COURT'; end if;
   n := coalesce(array_length(p_hours, 1), 0);
   if n = 0 then raise exception 'NO_SLOTS_SELECTED'; end if;
-  if exists (select 1 from unnest(p_hours) as selected(hour) where selected.hour is null) then raise exception 'INVALID_SLOT'; end if;
+  if exists (select 1 from unnest(p_hours) as selected(hour) where selected.hour is null or selected.hour < 0 or selected.hour > 23) then raise exception 'INVALID_SLOT'; end if;
   if (select count(distinct selected.hour) from unnest(p_hours) as selected(hour)) <> n then raise exception 'DUPLICATE_SLOTS'; end if;
   if p_date is null or p_date < now_local::date then raise exception 'PAST_DATE'; end if;
 
@@ -190,18 +208,22 @@ begin
   end loop;
 
   if exists (select 1 from public.booking_slots where court_id = p_court_id and booking_date = p_date and is_active and slot_hour = any(p_hours))
-     or exists (select 1 from public.booking_holds where court_id = p_court_id and booking_date = p_date and hours && p_hours) then
+     or exists (select 1 from public.booking_holds where court_id = p_court_id and booking_date = p_date and hours && p_hours and expires_at > now()) then
     raise exception 'SLOT_TAKEN';
   end if;
 
-  insert into public.booking_holds (court_id, booking_date, hours, hourly_rate, total_hours, total_amount, expires_at)
-  values (p_court_id, p_date, p_hours, cfg.hourly_rate, n, cfg.hourly_rate * n, now() + make_interval(mins => cfg.hold_minutes))
+  select array_agg(public.rate_for_hour(selected.hour, cfg.day_hourly_rate, cfg.night_hourly_rate) order by selected.ordinality)
+  into rates from unnest(p_hours) with ordinality as selected(hour, ordinality);
+  select sum(rate) into total from unnest(rates) as selected(rate);
+  insert into public.booking_holds (court_id, booking_date, hours, hourly_rate, slot_rates, total_hours, total_amount, expires_at)
+  values (p_court_id, p_date, p_hours, total / n, rates, n, total, now() + make_interval(mins => cfg.hold_minutes))
   returning * into hold;
 
   return jsonb_build_object(
     'booking_id', hold.id,
     'access_token', hold.access_token,
     'hourly_rate', hold.hourly_rate,
+    'slot_rates', hold.slot_rates,
     'total_hours', hold.total_hours,
     'total_amount', hold.total_amount,
     'hold_expires_at', hold.expires_at
@@ -232,6 +254,7 @@ declare
   hold public.booking_holds;
   phone_clean text := regexp_replace(coalesce(p_phone, ''), '[\s-]', '', 'g');
   bk public.bookings;
+  n integer;
 begin
   select * into hold from public.booking_holds where id = p_booking_id and access_token::text = p_access_token for update;
   if hold.id is null then
@@ -252,6 +275,8 @@ begin
   if length(trim(coalesce(p_email, ''))) > 254 or coalesce(p_email, '') !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'INVALID_EMAIL'; end if;
   if coalesce(p_receipt_path, '') !~ ('^' || hold.id::text || '/[^/]+$') then raise exception 'INVALID_RECEIPT_PATH'; end if;
   if not exists (select 1 from storage.objects where bucket_id = 'receipts' and name = p_receipt_path) then raise exception 'RECEIPT_REQUIRED'; end if;
+  if cardinality(hold.slot_rates) <> cardinality(hold.hours) then raise exception 'INVALID_HOLD_PRICING'; end if;
+  select sum(rate) into total from unnest(hold.slot_rates) as selected(rate);
 
   perform pg_advisory_xact_lock(hashtext(hold.court_id::text || hold.booking_date::text));
 
@@ -259,11 +284,13 @@ begin
     insert into public.bookings (id, access_token, court_id, booking_date, first_name, last_name, phone, email,
       total_hours, hourly_rate, total_amount, receipt_path, status, submitted_at)
     values (hold.id, hold.access_token, hold.court_id, hold.booking_date, trim(p_first_name), trim(p_last_name), phone_clean,
-      lower(trim(p_email)), hold.total_hours, hold.hourly_rate, hold.total_amount, p_receipt_path, 'pending', now())
+      lower(trim(p_email)), hold.total_hours, hold.hourly_rate, total, p_receipt_path, 'pending', now())
     returning * into bk;
 
-    insert into public.booking_slots (booking_id, court_id, booking_date, slot_hour)
-    select bk.id, hold.court_id, hold.booking_date, x from unnest(hold.hours) as x;
+    insert into public.booking_slots (booking_id, court_id, booking_date, slot_hour, hourly_rate)
+    select bk.id, hold.court_id, hold.booking_date, selected.hour, pricing.rate
+    from unnest(hold.hours) with ordinality as selected(hour, ordinality)
+    join unnest(hold.slot_rates) with ordinality as pricing(rate, ordinality) using (ordinality);
   exception when unique_violation then
     raise exception 'SLOT_TAKEN';
   end;
@@ -285,6 +312,7 @@ begin
     return jsonb_build_object(
       'booking_id', bk.id, 'status', bk.status, 'booking_date', bk.booking_date, 'court_name', cname,
       'hours', (select coalesce(jsonb_agg(slot_hour order by slot_hour), '[]'::jsonb) from public.booking_slots where booking_id = bk.id),
+      'slot_rates', (select coalesce(jsonb_agg(hourly_rate order by slot_hour), '[]'::jsonb) from public.booking_slots where booking_id = bk.id),
       'hourly_rate', bk.hourly_rate, 'total_amount', bk.total_amount, 'hold_expires_at', null,
       'first_name', bk.first_name, 'last_name', bk.last_name,
       'reference_code', bk.reference_code, 'email', bk.email, 'phone', bk.phone, 'submitted_at', bk.submitted_at);
@@ -298,7 +326,7 @@ begin
     'status', case when hold.expires_at > now() then 'held' else 'expired' end,
     'booking_date', hold.booking_date, 'court_name', cname,
     'hours', to_jsonb(hold.hours),
-    'hourly_rate', hold.hourly_rate, 'total_amount', hold.total_amount, 'hold_expires_at', hold.expires_at,
+    'slot_rates', to_jsonb(hold.slot_rates), 'hourly_rate', hold.hourly_rate, 'total_amount', hold.total_amount, 'hold_expires_at', hold.expires_at,
     'first_name', null, 'last_name', null);
 end $$;
 
@@ -311,6 +339,7 @@ declare
   cfg public.settings;
   now_local timestamp := now() at time zone 'Asia/Manila';
   n integer := coalesce(array_length(p_hours, 1), 0);
+  new_total numeric;
 begin
   if not public.is_admin() then raise exception 'FORBIDDEN'; end if;
   select * into bk from public.bookings where id = p_booking_id;
@@ -321,7 +350,7 @@ begin
   if cfg.id is null then raise exception 'SETTINGS_UNAVAILABLE'; end if;
   if not exists (select 1 from public.courts where id = p_court_id and is_active) then raise exception 'INVALID_COURT'; end if;
   if p_date is null or p_date < now_local::date then raise exception 'PAST_DATE'; end if;
-  if exists (select 1 from unnest(p_hours) as selected(hour) where selected.hour is null) then raise exception 'INVALID_SLOT'; end if;
+  if exists (select 1 from unnest(p_hours) as selected(hour) where selected.hour is null or selected.hour < 0 or selected.hour > 23) then raise exception 'INVALID_SLOT'; end if;
   if (select count(distinct selected.hour) from unnest(p_hours) as selected(hour)) <> n then raise exception 'DUPLICATE_SLOTS'; end if;
   if exists (
     select 1 from unnest(p_hours) as selected(hour)
@@ -341,11 +370,17 @@ begin
   end if;
 
   delete from public.booking_slots where booking_id = p_booking_id;
-  insert into public.booking_slots (booking_id, court_id, booking_date, slot_hour, is_active)
-  select p_booking_id, p_court_id, p_date, x, bk.status in ('pending','confirmed') from unnest(p_hours) as x;
+  select sum(public.rate_for_hour(selected.hour, cfg.day_hourly_rate, cfg.night_hourly_rate))
+  into new_total from unnest(p_hours) as selected(hour);
+  insert into public.booking_slots (booking_id, court_id, booking_date, slot_hour, hourly_rate, is_active)
+  select p_booking_id, p_court_id, p_date, selected.hour,
+    public.rate_for_hour(selected.hour, cfg.day_hourly_rate, cfg.night_hourly_rate),
+    bk.status in ('pending','confirmed')
+  from unnest(p_hours) as selected(hour);
 
   update public.bookings
-  set court_id = p_court_id, booking_date = p_date, total_hours = n, total_amount = bk.hourly_rate * n
+  set court_id = p_court_id, booking_date = p_date, total_hours = n,
+      hourly_rate = new_total / n, total_amount = new_total
   where id = p_booking_id;
 end $$;
 

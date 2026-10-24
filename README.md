@@ -36,9 +36,16 @@ npm install
 npm run dev
 ```
 
-### Booking summary lookup errors
+Booking pricing is configured separately for each slot: slots starting from 5:00 AM through 4:00 PM use the day rate, and slots starting from 5:00 PM through 4:00 AM use the night rate. The admin settings page controls both rates. Existing projects must apply all unapplied migrations before deploying the updated frontend. Migration `20261024090000_slot_based_pricing_and_24_hour_schedule.sql` snapshots each slot's rate so later settings changes do not alter existing booking totals. Migration `20261024110000_remove_ambiguous_hold_slots_overloads.sql` removes stale `hold_slots` RPC overloads, which can cause PostgREST error `PGRST203` when it cannot choose between integer and smallint signatures.
 
-If a customer booking link fails with PostgREST error `PGRST203`, the deployed database has multiple `get_my_booking` RPC overloads. This happens when an older `get_my_booking(uuid, uuid)` function remains beside a newer `get_my_booking(uuid, text)` function: both URL arguments are UUID values, so PostgREST cannot select the intended function. Apply the unapplied additive migrations in `supabase/migrations/` in timestamp order. The first removes the legacy signatures and recreates the single deployed signature `get_my_booking(uuid, uuid)`; the transaction-hardening migration follows it. The migrations request a PostgREST schema-cache reload. Do not run the destructive fresh-install schema against an existing database.
+### PostgREST `PGRST203` RPC overload errors
+
+The same PostgREST error can indicate ambiguity in different RPCs:
+
+- If it occurs when opening a customer booking link, multiple `get_my_booking` overloads remain. Apply the additive migrations in timestamp order to remove the legacy signatures and recreate the single deployed signature `get_my_booking(uuid, uuid)`.
+- If it occurs when selecting time slots, multiple `hold_slots` overloads remain. Apply `20261024110000_remove_ambiguous_hold_slots_overloads.sql`; it preserves `hold_slots(integer, date, integer[])` and removes the incompatible overloads.
+
+Both migrations notify PostgREST to reload its schema cache. Do not run the destructive fresh-install schema against an existing database.
 
 ### Transaction security migration
 

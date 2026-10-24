@@ -1,7 +1,7 @@
 -- WARNING: This schema is for context only and is not meant to be run.
 -- Table order and constraints may not be valid for execution.
--- Includes notification_settings and hold/booking security additions from the
--- additive migrations dated 20261023.
+-- Includes notification_settings, booking security, and slot-based pricing
+-- from the additive migrations dated 20261023 and 20261024.
 
 CREATE TABLE public.courts (
   id smallint GENERATED ALWAYS AS IDENTITY NOT NULL,
@@ -12,8 +12,10 @@ CREATE TABLE public.courts (
 CREATE TABLE public.settings (
   id smallint NOT NULL DEFAULT 1 CHECK (id = 1),
   business_name text NOT NULL DEFAULT 'Pickleball Courts'::text,
-  hourly_rate numeric NOT NULL DEFAULT 200 CHECK (hourly_rate >= 0::numeric),
-  open_hour smallint NOT NULL DEFAULT 5 CHECK (open_hour >= 0 AND open_hour <= 23),
+  hourly_rate numeric NOT NULL DEFAULT 175 CHECK (hourly_rate >= 0::numeric),
+  day_hourly_rate numeric NOT NULL DEFAULT 150 CHECK (day_hourly_rate >= 0::numeric),
+  night_hourly_rate numeric NOT NULL DEFAULT 200 CHECK (night_hourly_rate >= 0::numeric),
+  open_hour smallint NOT NULL DEFAULT 0 CHECK (open_hour >= 0 AND open_hour <= 23),
   close_hour smallint NOT NULL DEFAULT 24 CHECK (close_hour >= 1 AND close_hour <= 24),
   hold_minutes smallint NOT NULL DEFAULT 10 CHECK (hold_minutes >= 1 AND hold_minutes <= 60),
   gcash_qr_path text,
@@ -64,6 +66,7 @@ CREATE TABLE public.booking_slots (
   court_id smallint NOT NULL,
   booking_date date NOT NULL,
   slot_hour smallint NOT NULL CHECK (slot_hour >= 0 AND slot_hour <= 23),
+  hourly_rate numeric NOT NULL,
   is_active boolean NOT NULL DEFAULT true,
   CONSTRAINT booking_slots_pkey PRIMARY KEY (id),
   CONSTRAINT booking_slots_booking_id_fkey FOREIGN KEY (booking_id) REFERENCES public.bookings(id),
@@ -76,6 +79,7 @@ CREATE TABLE public.booking_holds (
   booking_date date NOT NULL,
   slot_hours ARRAY NOT NULL CHECK (cardinality(slot_hours) > 0),
   hourly_rate numeric NOT NULL CHECK (hourly_rate >= 0::numeric),
+  slot_rates numeric[] NOT NULL CHECK (cardinality(slot_rates) = cardinality(slot_hours)),
   hold_expires_at timestamp with time zone NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT booking_holds_pkey PRIMARY KEY (id),
@@ -93,9 +97,17 @@ CREATE UNIQUE INDEX active_booking_slot_key
 -- migration; PostgREST otherwise returns PGRST203 for UUID booking links.
 
 -- Transaction RPCs on deployed schemas use UUID access tokens:
--- hold_slots(integer, date, integer[])
+-- Exactly one PostgREST-visible hold_slots overload:
+-- hold_slots(integer, date, integer[]).
 -- cancel_hold(uuid, uuid)
 -- submit_payment(uuid, uuid, text, text, text, text, text)
+-- get_my_booking(uuid, uuid) includes ordered slot_rates matching hours.
+-- Hold and booking slot rates are persisted snapshots so a later settings
+-- change cannot alter an existing reservation's total.
+-- Slot start hours 5-16 use day_hourly_rate; 17-23 and 0-4 use
+-- night_hourly_rate. open_hour=0 and close_hour=24 enable all 24 slots.
+-- admin_reschedule_booking(uuid, integer, date, integer[]) reprices each slot
+-- using the current settings; submit_payment copies held slot rate snapshots.
 -- admin_delete_booking(uuid) -> text receipt_path
 -- The transaction-hardening migration detects the deployed slot_hours integer
 -- array type at runtime and safely casts the hold_slots input to match.

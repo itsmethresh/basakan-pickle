@@ -45,7 +45,7 @@ Deno.serve(async (request) => {
     if (!ownerEmail) return jsonResponse({ skipped: true, reason: 'Owner notification email is not configured' })
 
     const [{ data: slots, error: slotsError }, { data: court, error: courtError }] = await Promise.all([
-      admin.from('booking_slots').select('slot_hour').eq('booking_id', booking.id).order('slot_hour'),
+      admin.from('booking_slots').select('slot_hour,hourly_rate').eq('booking_id', booking.id).order('slot_hour'),
       admin.from('courts').select('name').eq('id', booking.court_id).single(),
     ])
     if (slotsError) throw slotsError
@@ -53,6 +53,11 @@ Deno.serve(async (request) => {
 
     const row = booking as Booking
     const schedule = (slots ?? []).map((slot) => timeRange(slot.slot_hour)).join(', ')
+    const priceBreakdown = new Map<number, number>()
+    for (const slot of slots ?? []) priceBreakdown.set(Number(slot.hourly_rate), (priceBreakdown.get(Number(slot.hourly_rate)) ?? 0) + 1)
+    const priceLines = [...priceBreakdown].map(([rate, count]) =>
+      `<li>${escapeHtml(count)} hour(s) × ${escapeHtml(`₱${rate.toFixed(2)}`)}: ${escapeHtml(`₱${(rate * count).toFixed(2)}`)}</li>`,
+    ).join('')
     const html = `
       <h2>New booking received</h2>
       <p><strong>${escapeHtml(row.reference_code)}</strong> is awaiting payment review.</p>
@@ -63,6 +68,7 @@ Deno.serve(async (request) => {
         <li>Court: ${escapeHtml(court.name)}</li>
         <li>Date: ${escapeHtml(row.booking_date)}</li>
         <li>Time: ${escapeHtml(schedule)}</li>
+        ${priceLines}
         <li>Total: ${escapeHtml(`₱${Number(row.total_amount).toFixed(2)}`)}</li>
       </ul>
       <p><a href="${escapeHtml(siteUrl('/admin'))}">Open the admin dashboard</a></p>

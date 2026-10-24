@@ -27,7 +27,10 @@ export function escapeHtml(value: unknown) {
 }
 
 export function timeRange(hour: number) {
-  const format = (value: number) => `${value % 12 || 12}:00 ${value >= 12 ? 'PM' : 'AM'}`
+  const format = (value: number) => {
+    const normalized = ((value % 24) + 24) % 24
+    return `${normalized % 12 || 12}:00 ${normalized >= 12 ? 'PM' : 'AM'}`
+  }
   return `${format(hour)} – ${format(hour + 1)}`
 }
 
