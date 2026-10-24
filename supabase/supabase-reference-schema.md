@@ -117,3 +117,7 @@ CREATE UNIQUE INDEX active_booking_slot_key
 -- image/webp. Uploads require an unexpired hold folder; deletion is allowed
 -- only for a receipt path not referenced by a booking. Restrictive storage
 -- policies prevent older permissive rules from bypassing receipt protections.
+-- The public assets bucket serves the customer-facing GCash QR and is limited
+-- to 2 MiB and image/jpeg, image/png, image/webp. Public reads remain enabled;
+-- restrictive insert/update/delete policies require public.is_admin() for
+-- assets writes, even if another permissive storage policy exists.

@@ -1,7 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarDays, Clock, LogOut, Plus, Search, Settings as SettingsIcon } from 'lucide-react'
+import { CalendarDays, Clock, LogOut, Search, Settings as SettingsIcon } from 'lucide-react'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { Toast } from '../components/Toast'
 import { supabase } from '../lib/supabase'
@@ -27,7 +27,6 @@ export function AdminPage() {
   const [authorized, setAuthorized] = useState(false); const [accessChecked, setAccessChecked] = useState(false); const [accessError, setAccessError] = useState('')
   const [search, setSearch] = useState(''); const [toast, setToast] = useState<{ message: string; variant: 'success' | 'error' } | null>(null); const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<'all' | BookingStatus>('all')
-  const [newReservationOpen, setNewReservationOpen] = useState(false)
   const [tab, setTab] = useState<Tab>('bookings'); const [menuOpen, setMenuOpen] = useState(false)
   const auth = useQuery({ queryKey: ['auth'], queryFn: async () => (await supabase.auth.getSession()).data.session })
   useEffect(() => {
@@ -73,7 +72,7 @@ export function AdminPage() {
       {tab === 'bookings' ? <>
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[#e5eae5] pb-5">
           <div><h1 className="text-3xl font-bold tracking-tight text-[#0f1e17]">Bookings</h1><p className="mt-1 text-sm text-[#526058]">Manage reservations and payment status.</p></div>
-          <div className="flex flex-wrap items-center gap-3"><LiveClock /><button onClick={() => setNewReservationOpen(true)} className="inline-flex items-center gap-2 rounded-lg bg-[#103b2b] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#186b48]"><Plus className="h-4 w-4" aria-hidden />New Reservation</button></div>
+          <LiveClock />
         </header>
         {bookings.isError && <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-[#fdeeee] p-3 text-sm text-[#a42a2a]">Bookings could not be loaded: {bookings.error.message}</p>}
         {courts.isError && <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-[#fdeeee] p-3 text-sm text-[#a42a2a]">Court totals could not be loaded: {courts.error.message}</p>}
@@ -90,9 +89,9 @@ export function AdminPage() {
           </div>
         </section>
         <section className="mt-5 overflow-hidden rounded-xl border border-[#e5eae5] bg-white">
-          <div className="overflow-x-auto">
+          <div className="max-h-[44rem] overflow-auto">
             <table className="w-full min-w-[680px] text-left text-sm">
-              <thead className="bg-[#f1f5f2] text-[11px] font-bold uppercase tracking-wider text-[#526058]"><tr><th className="px-5 py-4">Customer</th><th className="px-5 py-4">Schedule &amp; court</th><th className="px-5 py-4">Total</th><th className="px-5 py-4">Status</th><th className="px-5 py-4 text-right">Action</th></tr></thead>
+              <thead className="text-[11px] font-bold uppercase tracking-wider text-[#526058]"><tr><th className="sticky top-0 z-10 bg-[#f1f5f2] px-5 py-4">Customer</th><th className="sticky top-0 z-10 bg-[#f1f5f2] px-5 py-4">Schedule &amp; court</th><th className="sticky top-0 z-10 bg-[#f1f5f2] px-5 py-4">Total</th><th className="sticky top-0 z-10 bg-[#f1f5f2] px-5 py-4">Status</th><th className="sticky top-0 z-10 bg-[#f1f5f2] px-5 py-4 text-right">Action</th></tr></thead>
               <tbody className="divide-y divide-[#edf2ee]">{filtered.map((booking) => <tr key={booking.id} onClick={() => setSelectedId(booking.id)} className="h-16 cursor-pointer transition hover:bg-[#f5f9f6]">
                 <td className="px-5 py-3"><div className="font-bold text-[#0f1e17]">{booking.first_name || 'No name'} {booking.last_name || ''}</div><div className="font-mono text-xs tabular-nums text-[#708077]">{booking.reference_code}</div></td>
                 <td className="px-5 py-3"><div className="font-medium tabular-nums">{dateLabel(booking.booking_date)}</div><div className="text-xs text-[#708077]">Court {booking.court_id} · {booking.total_hours}h</div></td>
@@ -111,7 +110,6 @@ export function AdminPage() {
       </>}
     </main>
     {selected && <BookingModal booking={selected} onClose={() => setSelectedId(null)} onChanged={refresh} notify={notify} />}
-    {newReservationOpen && <NewReservationModal onClose={() => setNewReservationOpen(false)} onCreated={() => { setNewReservationOpen(false); refresh(); notify('Reservation created.') }} />}
     {toast && <Toast message={toast.message} variant={toast.variant} onClose={() => setToast(null)} />}
   </div>
 }
@@ -123,93 +121,6 @@ function MetricCard({ label, value, note, icon, accent = false, onClick }: { lab
 function StatusBadge({ status }: { status: string }) {
   const style = status === 'confirmed' ? 'bg-[#eaf6ee] text-[#1b633f]' : status === 'pending' ? 'bg-[#fef6e7] text-[#966004]' : status === 'rejected' || status === 'cancelled' ? 'bg-[#fdeeee] text-[#a42a2a]' : 'bg-[#eff3f1] text-[#57665f]'
   return <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-bold capitalize ${style}`}><span className="h-1.5 w-1.5 rounded-full bg-current" />{status}</span>
-}
-
-function NewReservationModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [date, setDate] = useState(todayManila())
-  const [court, setCourt] = useState(1)
-  const [hours, setHours] = useState<number[]>([])
-  const [firstName, setFirstName] = useState('')
-  const [lastName, setLastName] = useState('')
-  const [phone, setPhone] = useState('')
-  const [email, setEmail] = useState('')
-  const [notes, setNotes] = useState('')
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [confirmOpen, setConfirmOpen] = useState(false)
-  const courts = useQuery({
-    queryKey: ['new-reservation-courts'],
-    queryFn: async () => { const result = await supabase.from('courts').select('id').eq('is_active', true).order('id'); if (result.error) throw result.error; return result.data },
-  })
-  useEffect(() => { if (courts.data?.length && !courts.data.some((item) => item.id === court)) setCourt(courts.data[0].id) }, [courts.data, court])
-  const availability = useQuery({
-    queryKey: ['new-reservation-availability', date],
-    queryFn: async () => { const result = await supabase.rpc('get_availability', { p_date: date }); if (result.error) throw result.error; return result.data },
-  })
-  const settings = useQuery({
-    queryKey: ['new-reservation-settings'],
-    queryFn: async () => { const result = await supabase.from('settings').select('day_hourly_rate,night_hourly_rate,open_hour,close_hour').eq('id', 1).single(); if (result.error) throw result.error; return result.data },
-  })
-  useEffect(() => { setHours([]) }, [date, court])
-  useEffect(() => { const handleKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }; window.addEventListener('keydown', handleKey); return () => window.removeEventListener('keydown', handleKey) }, [busy, onClose])
-  const blocked = new Set((availability.data ?? []).filter((slot) => slot.court_id === court).map((slot) => slot.slot_hour))
-  const openHour = settings.data?.open_hour ?? 0
-  const closeHour = settings.data?.close_hour ?? 24
-  const save = async (confirmed = false) => {
-    if (courts.isError || settings.isError || availability.isError) { setError('Reservation data could not be loaded. Please close this dialog and try again.'); return }
-    if (!courts.data?.length || !settings.data) { setError('No active courts or booking settings are available.'); return }
-    if (!firstName.trim() || !lastName.trim() || !hours.length) { setError('Enter the customer name and select at least one available time slot.'); return }
-    if (hours.some((hour) => isPastSlot(date, hour) || blocked.has(hour))) { setError('One or more selected times are no longer available. Refresh and choose another time.'); return }
-    if (!confirmed) { setConfirmOpen(true); return }
-    setBusy(true); setError('')
-    const id = crypto.randomUUID()
-    const insert = await supabase.from('bookings').insert({
-      id, access_token: crypto.randomUUID().replace(/-/g, ''), court_id: court, booking_date: date,
-      first_name: firstName.trim(), last_name: lastName.trim(), phone: phone.trim() || null, email: email.trim().toLowerCase() || null,
-      total_hours: hours.length, hourly_rate: totalForHours(hours, settings.data) / hours.length, total_amount: totalForHours(hours, settings.data),
-      status: 'confirmed', admin_notes: notes.trim() || null, submitted_at: new Date().toISOString(), confirmed_at: new Date().toISOString(),
-    })
-    if (insert.error) { setError(friendlyError(insert.error)); setBusy(false); return }
-    const slotInsert = await supabase.from('booking_slots').insert(hours.map((slot_hour) => ({ booking_id: id, court_id: court, booking_date: date, slot_hour, hourly_rate: rateForHour(slot_hour, settings.data), is_active: true })))
-    if (slotInsert.error) {
-      const cleanup = await supabase.from('bookings').delete().eq('id', id)
-      setError(cleanup.error ? `${friendlyError(slotInsert.error)} The incomplete reservation could not be removed: ${cleanup.error.message}` : friendlyError(slotInsert.error))
-      setBusy(false)
-      return
-    }
-    setBusy(false)
-    onCreated()
-  }
-  const input = 'mt-1 w-full rounded-lg border border-[#dce3de] bg-white px-3 py-2.5 text-sm outline-none focus:border-[#2e7d58] focus:ring-2 focus:ring-[#2e7d58]/15'
-  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#002418]/45 sm:items-center sm:p-5">
-    <button aria-label="Close new reservation" onClick={onClose} className="absolute inset-0" />
-    <section role="dialog" aria-modal="true" aria-labelledby="new-reservation-title" className="relative max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-t-2xl bg-[#f8faf8] shadow-[0_20px_40px_-8px_rgba(16,59,43,0.2)] sm:rounded-2xl">
-      <header className="sticky top-0 z-10 flex items-start justify-between border-b border-[#e5eae5] bg-white px-5 py-4 sm:px-6"><div><h2 id="new-reservation-title" className="text-xl font-bold text-[#103b2b]">New reservation</h2><p className="mt-1 text-sm text-[#526058]">Create a confirmed court booking.</p></div><button onClick={onClose} aria-label="Close" className="rounded-md px-3 py-1 text-xl text-[#708077] hover:bg-[#f2f4f2]">×</button></header>
-      <div className="space-y-5 p-5 sm:p-6">
-        {error && <p role="alert" className="rounded-lg border border-red-200 bg-[#fdeeee] p-3 text-sm text-[#a42a2a]">{error}</p>}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="text-xs font-bold text-[#526058]">First name<input value={firstName} onChange={(event) => setFirstName(event.target.value)} className={input} autoFocus /></label>
-          <label className="text-xs font-bold text-[#526058]">Last name<input value={lastName} onChange={(event) => setLastName(event.target.value)} className={input} /></label>
-          <label className="text-xs font-bold text-[#526058]">Phone<input value={phone} onChange={(event) => setPhone(event.target.value)} className={input} /></label>
-          <label className="text-xs font-bold text-[#526058]">Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} className={input} /></label>
-          <label className="text-xs font-bold text-[#526058]">Date<input type="date" min={todayManila()} value={date} onChange={(event) => setDate(event.target.value)} className={input} /></label>
-          <label className="text-xs font-bold text-[#526058]">Court<select value={court} onChange={(event) => setCourt(Number(event.target.value))} className={input}>{(courts.data ?? []).map(({ id }) => <option key={id} value={id}>Court {id}</option>)}</select></label>
-        </div>
-        <div>
-          <div className="flex items-baseline justify-between"><p className="text-xs font-bold uppercase tracking-wider text-[#526058]">Available time slots</p><p className="text-xs text-[#708077]">{hours.length} selected · {money(settings.data ? totalForHours(hours, settings.data) : 0)}</p></div>
-          {availability.isError && <p role="alert" className="mt-2 text-sm text-red-700">Availability could not be loaded. Try again before creating a reservation.</p>}
-          {(courts.isError || settings.isError) && <p role="alert" className="mt-2 text-sm text-red-700">Court or pricing settings could not be loaded. Try closing and reopening this form.</p>}
-          {!courts.isLoading && !courts.isError && !courts.data?.length && <p role="alert" className="mt-2 text-sm text-red-700">There are no active courts available to reserve.</p>}
-          <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">{Array.from({ length: Math.max(0, closeHour - openHour) }, (_, index) => index + openHour).map((hour) => { const past = isPastSlot(date, hour); const unavailable = blocked.has(hour) || past; const selected = hours.includes(hour); const rate = settings.data ? rateForHour(hour, settings.data) : 0; return <button key={hour} type="button" disabled={unavailable || availability.isLoading} onClick={() => setHours((current) => selected ? current.filter((value) => value !== hour) : [...current, hour].sort((a, b) => a - b))} className={`rounded-lg border px-2 py-2 text-xs font-semibold transition ${unavailable ? 'cursor-not-allowed border-[#e5eae5] bg-[#f2f4f2] text-[#a0aaa4] line-through' : selected ? 'border-[#103b2b] bg-[#103b2b] text-white' : 'border-[#dce3de] bg-white text-[#526058] hover:border-[#2e7d58]'}`}>{timeLabel(hour)} · {money(rate)}</button> })}</div>
-          {availability.isLoading && <p className="mt-2 text-xs text-[#708077]">Loading availability…</p>}
-        </div>
-        <label className="block text-xs font-bold text-[#526058]">Admin notes<textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} className={input} /></label>
-        <p className="rounded-lg bg-[#eaf6ee] p-3 text-xs text-[#1b633f]">Creating this reservation will mark it confirmed and reserve the selected time slots.</p>
-      </div>
-      <footer className="flex justify-end gap-2 border-t border-[#e5eae5] bg-white px-5 py-4 sm:px-6"><button onClick={onClose} disabled={busy} className="rounded-lg border border-[#d0dcd4] px-4 py-2.5 text-sm font-bold text-[#526058]">Cancel</button><button onClick={() => void save()} disabled={busy || availability.isLoading || settings.isLoading || courts.isLoading || availability.isError || settings.isError || courts.isError || !courts.data?.length || !hours.length} className="rounded-lg bg-[#103b2b] px-5 py-2.5 text-sm font-bold text-white hover:bg-[#186b48] disabled:opacity-50">{busy ? 'Creating…' : 'Create reservation'}</button></footer>
-    </section>
-    {confirmOpen && <ConfirmDialog title="Create this reservation?" description={`This will create a confirmed booking for ${firstName.trim()} ${lastName.trim()}.`} confirmLabel="Create reservation" details={<div className="rounded-lg border border-[#e5eae5] bg-white p-3 text-sm text-[#526058]"><p className="font-semibold text-[#103b2b]">{dateLabel(date)} · Court {court}</p><p className="mt-1">{hours.map(timeLabel).join(', ')}</p><p className="mt-2 font-bold text-[#103b2b]">{money(settings.data ? totalForHours(hours, settings.data) : 0)}</p></div>} onCancel={() => setConfirmOpen(false)} onConfirm={() => save(true)} />}
-  </div>
 }
 
 function BookingModal({ booking, onClose, onChanged, notify }: { booking: Booking; onClose: () => void; onChanged: () => void; notify: (message: string, variant?: 'success' | 'error') => void }) {
@@ -309,9 +220,10 @@ function SettingsPanel({ onSaved, onUploaded }: { onSaved: () => void; onUploade
     else onSaved()
   }
   const upload = async (file: File) => {
-    if (!file.type.startsWith('image/') || file.size > 2 * 1024 * 1024) { setError('QR must be an image up to 2MB.'); return }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 2 * 1024 * 1024) { setError('QR must be a JPEG, PNG, or WEBP image up to 2MB.'); return }
     setUploading(true); setError('')
-    const path = `gcash-qr-${Date.now()}.${file.name.split('.').pop()}`
+    const extension = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/png' ? 'png' : 'webp'
+    const path = `gcash-qr-${Date.now()}.${extension}`
     const result = await supabase.storage.from('assets').upload(path, file, { upsert: true, contentType: file.type })
     setUploading(false)
     if (result.error) setError(friendlyError(result.error))
@@ -329,7 +241,7 @@ function SettingsPanel({ onSaved, onUploaded }: { onSaved: () => void; onUploade
         <p className="mt-2 text-xs text-[#708077]">New customer bookings will be sent to this address. Leave blank to pause owner notification emails.</p>
       </div>
       <div className="rounded-xl border border-[#e5eae5] bg-[#f8faf8] p-4">
-        <label className="block text-xs font-bold text-[#526058]">GCash QR image<input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file) }} className="mt-2 block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-[#eaf6ee] file:px-3 file:py-2 file:font-semibold file:text-[#1b633f]" /></label>
+        <label className="block text-xs font-bold text-[#526058]">GCash QR image<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file) }} className="mt-2 block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-[#eaf6ee] file:px-3 file:py-2 file:font-semibold file:text-[#1b633f]" /></label>
         <p className="mt-2 text-xs text-[#708077]">{uploading ? 'Uploading QR image…' : form.gcash_qr_path ? `Current QR: ${form.gcash_qr_path}` : 'No QR image uploaded.'} Maximum image size: 2MB.</p>
       </div>
       <div className="flex justify-end"><button onClick={() => void save()} disabled={saving || uploading} className="rounded-lg bg-[#103b2b] px-5 py-3 text-sm font-bold text-white transition hover:bg-[#186b48] disabled:opacity-50">{saving ? 'Saving…' : 'Save settings'}</button></div>
